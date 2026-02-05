@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Patrol Scanner</title>
+    <style>
+        /* --- Basic Layout & Typography --- */
+        body, html { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; overflow: hidden; }
+        .screen { display: none; width: 100%; height: 100%; box-sizing: border-box; }
+        .screen.active { display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        .container { width: 90%; max-width: 400px; text-align: center; }
+
+        /* --- Name Input Screen --- */
+        #nameInputScreen { background-color: #f0f2f5; }
+        h1 { color: #1c1e21; font-size: 1.8em; margin-bottom: 0.5em; }
+        p { color: #606770; font-size: 1em; margin-bottom: 1.5em; }
+        #nameInput {
+            width: 100%; padding: 14px; margin-bottom: 1em; font-size: 1em;
+            border: 1px solid #dddfe2; border-radius: 6px; box-sizing: border-box;
+        }
+        #startPatrolBtn {
+            width: 100%; padding: 14px; font-size: 1.1em; font-weight: bold; color: white;
+            background-color: #1877f2; border: none; border-radius: 6px; cursor: pointer;
+        }
+
+        /* --- Scanner Screen --- */
+        #scannerScreen { background-color: black; }
+        #reader { width: 100%; max-width: 600px; }
+        #nameDisplay {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.6); color: white; padding: 8px 15px;
+            border-radius: 18px; font-size: 0.9em; backdrop-filter: blur(5px);
+        }
+
+        /* --- Result Popup --- */
+        #resultPopup {
+            position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+            padding: 12px 25px; border-radius: 8px; color: white; font-size: 1.1em;
+            font-weight: 500; z-index: 1000; display: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        #resultPopup.success { background-color: #42b72a; }
+        #resultPopup.error { background-color: #fa3e3e; }
+    </style>
+</head>
+<body>
+
+    <!-- ===== Name Input Screen ===== -->
+    <div id="nameInputScreen" class="screen active">
+        <div class="container">
+            <h1>Patrol Check-in</h1>
+            <p>Please enter your name to begin.</p>
+            <input type="text" id="nameInput" placeholder="Enter your name">
+            <button id="startPatrolBtn">Start Patrol</button>
+        </div>
+    </div>
+
+    <!-- ===== Scanner Screen ===== -->
+    <div id="scannerScreen" class="screen">
+        <div id="reader"></div>
+        <div id="nameDisplay"></div>
+    </div>
+
+    <!-- ===== Result Popup ===== -->
+    <div id="resultPopup"></div>
+
+    <!-- External library for QR Code scanning -->
+    <script src="https://unpkg.com/html5-qrcode/html5-qrcode.min.js"></script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', ( ) => {
+            // --- Screen and Element References ---
+            const nameInputScreen = document.getElementById('nameInputScreen');
+            const scannerScreen = document.getElementById('scannerScreen');
+            const nameInput = document.getElementById('nameInput');
+            const startPatrolBtn = document.getElementById('startPatrolBtn');
+            const nameDisplay = document.getElementById('nameDisplay');
+            const resultPopup = document.getElementById('resultPopup');
+
+            let patrolName = '';
+            let isSubmitting = false;
+
+            // --- Google Form Configuration (CORRECTED ENTRY IDs) ---
+            const FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdpFKFBI2Ur8YVn3l6pSJkji9UN9LAEk1zZjfStsyXH0XAM4A/formResponse";
+            const ENTRY_IDS = {
+                NAME: "entry.2080151344",
+                LOCATION: "entry.1213910238",
+                GPS: "entry.2042540406"
+            };
+
+            // --- Event Listener for "Start" Button ---
+            startPatrolBtn.addEventListener('click', ( ) => {
+                const name = nameInput.value.trim();
+                if (name) {
+                    patrolName = name;
+                    nameDisplay.textContent = `Officer: ${patrolName}`;
+                    
+                    nameInputScreen.classList.remove('active');
+                    scannerScreen.classList.add('active');
+                    
+                    startScanner();
+                } else {
+                    alert('Please enter your name.');
+                }
+            });
+
+            // --- Function to show result popup ---
+            function showResult(message, type = 'success') {
+                resultPopup.textContent = message;
+                resultPopup.className = type;
+                resultPopup.style.display = 'block';
+                setTimeout(() => {
+                    resultPopup.style.display = 'none';
+                }, 2500);
+            }
+
+            // --- Function to get GPS location ---
+            function getGPSLocation(callback) {
+                if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(
+                        (position) => {
+                            const coords = `${position.coords.latitude}, ${position.coords.longitude}`;
+                            callback(coords);
+                        },
+                        () => {
+                            callback("GPS permission denied or unavailable");
+                        },
+                        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                    );
+                } else {
+                    callback("GPS not supported by this browser");
+                }
+            }
+
+            // --- Function to submit data to Google Form ---
+            function submitData(locationName, gpsCoords) {
+                const timestamp = new Date().toISOString();
+                
+                const formData = new FormData();
+                formData.append(ENTRY_IDS.NAME, patrolName);
+                formData.append(ENTRY_IDS.LOCATION, locationName);
+                formData.append(ENTRY_IDS.GPS, gpsCoords);
+
+                fetch(FORM_URL, {
+                    method: 'POST',
+                    body: formData,
+                    mode: 'no-cors'
+                })
+                .then(() => {
+                    showResult(`Success: "${locationName}" recorded.`, 'success');
+                })
+                .catch(error => {
+                    showResult('Error: Submission failed.', 'error');
+                })
+                .finally(() => {
+                    setTimeout(() => { isSubmitting = false; }, 1000);
+                });
+            }
+
+            // --- QR Code Scan Success Callback ---
+            function onScanSuccess(decodedText, decodedResult) {
+                if (isSubmitting) return;
+                isSubmitting = true;
+
+                if (navigator.vibrate) {
+                    navigator.vibrate(100);
+                }
+
+                getGPSLocation((gpsCoords) => {
+                    submitData(decodedText, gpsCoords);
+                });
+            }
+
+            // --- Function to initialize and start the scanner ---
+            function startScanner() {
+                const html5Qrcode = new Html5Qrcode("reader");
+                const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+                
+                html5Qrcode.start({ facingMode: "environment" }, config, onScanSuccess)
+                .catch(err => {
+                    console.error("Unable to start scanning.", err);
+                    alert("Error: Could not start the camera. Please check permissions.");
+                });
+            }
+        });
+    </script>
+</body>
+</html>
