@@ -33,15 +33,39 @@
             border-radius: 18px; font-size: 0.9em; backdrop-filter: blur(5px);
         }
 
-        /* --- Result Popup --- */
+        /* --- Result Popup (Simplified) --- */
         #resultPopup {
-            position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-            padding: 12px 25px; border-radius: 8px; color: white; font-size: 1.1em;
-            font-weight: 500; z-index: 1000; display: none;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            padding: 40px 50px; border-radius: 16px; color: white; font-size: 1.5em;
+            font-weight: 700; z-index: 1000; display: none;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+            min-width: 280px; text-align: center;
+            animation: fadeIn 0.2s ease-in;
         }
-        #resultPopup.success { background-color: #42b72a; }
-        #resultPopup.error { background-color: #fa3e3e; }
+        #resultPopup.success { 
+            background-color: #42b72a;
+        }
+        #resultPopup.error { 
+            background-color: #fa3e3e;
+        }
+
+        /* --- Cooldown Timer Display --- */
+        #cooldownDisplay {
+            position: fixed; bottom: 20px; right: 20px;
+            background-color: rgba(255, 255, 255, 0.2); color: white; 
+            padding: 10px 20px; border-radius: 20px; font-size: 1em;
+            font-weight: 600; display: none; backdrop-filter: blur(5px);
+        }
+
+        /* --- Animation --- */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
     </style>
 </head>
 <body>
@@ -60,6 +84,7 @@
     <div id="scannerScreen" class="screen">
         <div id="reader"></div>
         <div id="nameDisplay"></div>
+        <div id="cooldownDisplay"></div>
     </div>
 
     <!-- ===== Result Popup ===== -->
@@ -69,7 +94,7 @@
     <script src="https://unpkg.com/html5-qrcode/html5-qrcode.min.js"></script>
 
     <script>
-        document.addEventListener('DOMContentLoaded', ( ) => {
+        document.addEventListener('DOMContentLoaded', () => {
             // --- Screen and Element References ---
             const nameInputScreen = document.getElementById('nameInputScreen');
             const scannerScreen = document.getElementById('scannerScreen');
@@ -77,11 +102,15 @@
             const startPatrolBtn = document.getElementById('startPatrolBtn');
             const nameDisplay = document.getElementById('nameDisplay');
             const resultPopup = document.getElementById('resultPopup');
+            const cooldownDisplay = document.getElementById('cooldownDisplay');
 
             let patrolName = '';
             let isSubmitting = false;
+            let cooldownEndTime = 0;
+            let currentGPS = 'GPS not available';
+            let gpsUpdateInterval = null;
 
-            // --- Google Form Configuration (CORRECTED ENTRY IDs) ---
+            // --- Google Form Configuration ---
             const FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdpFKFBI2Ur8YVn3l6pSJkji9UN9LAEk1zZjfStsyXH0XAM4A/formResponse";
             const ENTRY_IDS = {
                 NAME: "entry.2080151344",
@@ -89,8 +118,11 @@
                 GPS: "entry.2042540406"
             };
 
+            // --- Cooldown Duration (in milliseconds) ---
+            const COOLDOWN_DURATION = 5000; // 5 seconds
+
             // --- Event Listener for "Start" Button ---
-            startPatrolBtn.addEventListener('click', ( ) => {
+            startPatrolBtn.addEventListener('click', () => {
                 const name = nameInput.value.trim();
                 if (name) {
                     patrolName = name;
@@ -99,38 +131,115 @@
                     nameInputScreen.classList.remove('active');
                     scannerScreen.classList.add('active');
                     
+                    // Request GPS permission once at startup
+                    requestGPSPermission();
+                    
+                    // Start background GPS update (every 3 seconds)
+                    startBackgroundGPSUpdate();
+                    
                     startScanner();
                 } else {
                     alert('Please enter your name.');
                 }
             });
 
-            // --- Function to show result popup ---
+            // --- Function to show result popup with enhanced feedback ---
             function showResult(message, type = 'success') {
                 resultPopup.textContent = message;
                 resultPopup.className = type;
                 resultPopup.style.display = 'block';
+
+                // Play sound feedback
+                playSuccessSound();
+
+                // Vibration feedback
+                if (navigator.vibrate) {
+                    if (type === 'success') {
+                        navigator.vibrate([100, 50, 100]); // Double vibration for success
+                    } else {
+                        navigator.vibrate(200); // Single vibration for error
+                    }
+                }
+
                 setTimeout(() => {
                     resultPopup.style.display = 'none';
-                }, 2500);
+                }, 5000); // Display for 5 seconds
             }
 
-            // --- Function to get GPS location ---
-            function getGPSLocation(callback) {
+            // --- Function to play success sound ---
+            function playSuccessSound() {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+
+                oscillator.frequency.value = 800; // Hz
+                oscillator.type = 'sine';
+
+                gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+
+                oscillator.start(audioContext.currentTime);
+                oscillator.stop(audioContext.currentTime + 0.2);
+            }
+
+            // --- Function to update cooldown display ---
+            function updateCooldownDisplay() {
+                const now = Date.now();
+                const remainingTime = Math.max(0, Math.ceil((cooldownEndTime - now) / 1000));
+
+                if (remainingTime > 0) {
+                    cooldownDisplay.textContent = `Ready in: ${remainingTime}s`;
+                    cooldownDisplay.style.display = 'block';
+                    setTimeout(updateCooldownDisplay, 100);
+                } else {
+                    cooldownDisplay.style.display = 'none';
+                }
+            }
+
+            // --- Function to request GPS permission at startup ---
+            function requestGPSPermission() {
                 if (navigator.geolocation) {
                     navigator.geolocation.getCurrentPosition(
                         (position) => {
-                            const coords = `${position.coords.latitude}, ${position.coords.longitude}`;
-                            callback(coords);
+                            currentGPS = `${position.coords.latitude}, ${position.coords.longitude}`;
                         },
                         () => {
-                            callback("GPS permission denied or unavailable");
+                            currentGPS = "GPS permission denied or unavailable";
                         },
                         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
                     );
                 } else {
-                    callback("GPS not supported by this browser");
+                    currentGPS = "GPS not supported by this browser";
                 }
+            }
+
+            // --- Function to start background GPS update ---
+            function startBackgroundGPSUpdate() {
+                if (gpsUpdateInterval) {
+                    clearInterval(gpsUpdateInterval);
+                }
+                
+                gpsUpdateInterval = setInterval(() => {
+                    if (navigator.geolocation) {
+                        navigator.geolocation.getCurrentPosition(
+                            (position) => {
+                                currentGPS = `${position.coords.latitude}, ${position.coords.longitude}`;
+                            },
+                            () => {
+                                // Keep previous GPS value if error
+                            },
+                            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                        );
+                    }
+                }, 3000); // Update every 3 seconds
+            }
+
+            // --- Function to get GPS location (uses cached value) ---
+            function getGPSLocation(callback) {
+                callback(currentGPS);
             }
 
             // --- Function to submit data to Google Form ---
@@ -148,28 +257,31 @@
                     mode: 'no-cors'
                 })
                 .then(() => {
-                    showResult(`Success: "${locationName}" recorded.`, 'success');
+                    showResult(`✓ "${locationName}" recorded`, 'success');
                 })
                 .catch(error => {
-                    showResult('Error: Submission failed.', 'error');
+                    showResult('✗ Submission failed', 'error');
                 })
                 .finally(() => {
-                    setTimeout(() => { isSubmitting = false; }, 1000);
+                    isSubmitting = false;
                 });
             }
 
             // --- QR Code Scan Success Callback ---
             function onScanSuccess(decodedText, decodedResult) {
-                if (isSubmitting) return;
-                isSubmitting = true;
-
-                if (navigator.vibrate) {
-                    navigator.vibrate(100);
+                const now = Date.now();
+                
+                // Check if still in cooldown period
+                if (now < cooldownEndTime) {
+                    return; // Ignore scan during cooldown
                 }
 
-                getGPSLocation((gpsCoords) => {
-                    submitData(decodedText, gpsCoords);
-                });
+                isSubmitting = true;
+                cooldownEndTime = now + COOLDOWN_DURATION;
+                updateCooldownDisplay();
+
+                // Use current cached GPS value (updated in background)
+                submitData(decodedText, currentGPS);
             }
 
             // --- Function to initialize and start the scanner ---
@@ -183,6 +295,13 @@
                     alert("Error: Could not start the camera. Please check permissions.");
                 });
             }
+
+            // --- Cleanup on page unload ---
+            window.addEventListener('beforeunload', () => {
+                if (gpsUpdateInterval) {
+                    clearInterval(gpsUpdateInterval);
+                }
+            });
         });
     </script>
 </body>
